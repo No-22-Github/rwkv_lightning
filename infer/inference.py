@@ -1,6 +1,7 @@
 import asyncio
 import gc
 import json
+import os
 import random
 import time
 from collections import deque
@@ -997,15 +998,49 @@ class InferenceEngine:
         chunk_size=32,
     ):
         prompt = inputs[0]
+        ttft_enabled = os.getenv("RWKV_TTFT_LOG") == "1"
+        ttft_start = time.perf_counter() if ttft_enabled else None
+        prompt_tokens = None
+        encode_ms = 0.0
+        zero_state_ms = 0.0
+        prefill_forward_ms = 0.0
+        first_token_sample_ms = 0.0
+        cuda_graph_setup_ms = 0.0
+
+        encode_start = time.perf_counter() if ttft_enabled else None
         encoded_prompt = self.tokenizer.encode(prompt)
+        if ttft_enabled and encode_start is not None:
+            encode_ms = (time.perf_counter() - encode_start) * 1000.0
+            prompt_tokens = len(encoded_prompt)
 
+        if ttft_enabled and torch.cuda.is_available():
+            torch.cuda.synchronize()
+        zero_state_start = time.perf_counter() if ttft_enabled else None
         state = self.model.generate_zero_state(0)
+        if ttft_enabled and zero_state_start is not None:
+            if torch.cuda.is_available():
+                torch.cuda.synchronize()
+            zero_state_ms = (time.perf_counter() - zero_state_start) * 1000.0
 
+        if ttft_enabled and torch.cuda.is_available():
+            torch.cuda.synchronize()
+        prefill_start = time.perf_counter() if ttft_enabled else None
         out = self.model.forward(encoded_prompt, state)
+        if ttft_enabled and prefill_start is not None:
+            if torch.cuda.is_available():
+                torch.cuda.synchronize()
+            prefill_forward_ms = (time.perf_counter() - prefill_start) * 1000.0
 
+        sample_start = time.perf_counter() if ttft_enabled else None
         token = sampler_gumbel_batch(logits=out, temp=temperature).item()
+        if ttft_enabled and sample_start is not None:
+            first_token_sample_ms = (time.perf_counter() - sample_start) * 1000.0
 
         x_emb = self.model.z["emb.weight"][token]
+
+        if ttft_enabled and torch.cuda.is_available():
+            torch.cuda.synchronize()
+        graph_setup_start = time.perf_counter() if ttft_enabled else None
 
         static_input = torch.empty_like(x_emb, device="cuda")
         static_state = [None, None, None]
@@ -1020,6 +1055,11 @@ class InferenceEngine:
         with torch.cuda.graph(g):
             static_output = self.model.forward(static_input, static_state)
 
+        if ttft_enabled and graph_setup_start is not None:
+            if torch.cuda.is_available():
+                torch.cuda.synchronize()
+            cuda_graph_setup_ms = (time.perf_counter() - graph_setup_start) * 1000.0
+
         static_input.copy_(x_emb)
         static_state[0].copy_(state[0])
         static_state[1].copy_(state[1])
@@ -1032,6 +1072,27 @@ class InferenceEngine:
             if token not in stop_tokens:
                 content = self.tokenizer.decode([token], utf8_errors="ignore")
                 if content:
+                    if ttft_enabled and ttft_start is not None:
+                        ttft_first_content_yield_ms = (
+                            time.perf_counter() - ttft_start
+                        ) * 1000.0
+                        print(
+                            "[TTFT] prompt_tokens={prompt_tokens} "
+                            "encode_ms={encode_ms:.3f} "
+                            "zero_state_ms={zero_state_ms:.3f} "
+                            "prefill_forward_ms={prefill_forward_ms:.3f} "
+                            "first_token_sample_ms={first_token_sample_ms:.3f} "
+                            "cuda_graph_setup_ms={cuda_graph_setup_ms:.3f} "
+                            "ttft_first_content_yield_ms={ttft_first_content_yield_ms:.3f}".format(
+                                prompt_tokens=prompt_tokens,
+                                encode_ms=encode_ms,
+                                zero_state_ms=zero_state_ms,
+                                prefill_forward_ms=prefill_forward_ms,
+                                first_token_sample_ms=first_token_sample_ms,
+                                cuda_graph_setup_ms=cuda_graph_setup_ms,
+                                ttft_first_content_yield_ms=ttft_first_content_yield_ms,
+                            )
+                        )
                     chunk = {
                         "object": "chat.completion.chunk",
                         "choices": [{"index": 0, "delta": {"content": content}}],
