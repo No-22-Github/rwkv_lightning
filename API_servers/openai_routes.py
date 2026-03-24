@@ -332,7 +332,7 @@ def register_openai_routes(app, engine, password, chat_request_model):
 
             if req.session_id:
                 state_manager, state = _get_or_init_state(engine, req.session_id)
-                results = engine.batch_generate_state(
+                results, finish_reason = engine.batch_generate_state(
                     prompts=[prompt_formatted],
                     state=state,
                     max_length=req.max_tokens,
@@ -346,7 +346,6 @@ def register_openai_routes(app, engine, password, chat_request_model):
                 )
                 state_manager.put_state(req.session_id, state)
                 result_text = results[0] if results else ""
-                finish_reason = "stop"
             else:
                 result_text, finish_reason = await engine.dynamic_batch_generate(
                     prompt=prompt_formatted,

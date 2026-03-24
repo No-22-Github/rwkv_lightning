@@ -663,7 +663,7 @@ def create_app(engine, password=None):
                 media_type="text/event-stream",
             )
 
-        results = engine.batch_generate_state(
+        results, finish_reason = engine.batch_generate_state(
             prompts=prompts,
             state=state,
             max_length=req.max_tokens,
@@ -682,7 +682,7 @@ def create_app(engine, password=None):
                 {
                     "index": i,
                     "message": {"role": "assistant", "content": text},
-                    "finish_reason": "stop",
+                    "finish_reason": finish_reason,
                 }
             )
 
@@ -812,7 +812,7 @@ def create_app(engine, password=None):
                 media_type="text/event-stream",
             )
 
-        results = engine.batch_generate_state(
+        results, finish_reason = engine.batch_generate_state(
             prompts=prompts,
             state=state,
             max_length=req.max_tokens,
@@ -834,7 +834,7 @@ def create_app(engine, password=None):
                 {
                     "index": i,
                     "message": {"role": "assistant", "content": text},
-                    "finish_reason": "stop",
+                    "finish_reason": finish_reason,
                 }
             )
 

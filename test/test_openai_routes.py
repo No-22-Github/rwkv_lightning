@@ -103,6 +103,7 @@ class DummyEngine:
         self.dynamic_stream_calls: list[dict] = []
         self.state_stream_calls: list[dict] = []
         self.graph_stream_calls: list[dict] = []
+        self.state_finish_reason = "stop"
 
     async def dynamic_batch_generate(self, **kwargs):
         self.dynamic_calls.append(kwargs)
@@ -110,7 +111,7 @@ class DummyEngine:
 
     def batch_generate_state(self, **kwargs):
         self.state_calls.append(kwargs)
-        return ["stateful-ok"]
+        return ["stateful-ok"], self.state_finish_reason
 
     async def dynamic_batch_infer_stream(self, **kwargs):
         self.dynamic_stream_calls.append(kwargs)
@@ -227,6 +228,40 @@ async def test_openai_route_stateful_non_stream_uses_state_cache() -> None:
     if "Only new turn" not in prompt:
         raise AssertionError("stateful prompt should include the incremental turn")
     print("[PASS] test_openai_route_stateful_non_stream_uses_state_cache")
+
+
+async def test_openai_route_stateful_non_stream_propagates_finish_reason() -> None:
+    app = DummyApp()
+    engine = DummyEngine()
+    engine.state_finish_reason = "length"
+    manager = DummyStateManager(initial_state=None)
+    original_get_state_manager = openai_routes.get_state_manager
+    openai_routes.get_state_manager = lambda: manager
+    try:
+        openai_routes.register_openai_routes(
+            app, engine, password=None, chat_request_model=ChatRequest
+        )
+        route = app.routes["/openai/v1/chat/completions"]
+
+        response = await route(
+            DummyRequest(
+                {
+                    "messages": [{"role": "user", "content": "Long answer"}],
+                    "session_id": "sess-finish",
+                    "stream": False,
+                }
+            )
+        )
+    finally:
+        openai_routes.get_state_manager = original_get_state_manager
+
+    payload = json.loads(response.description)
+    _assert_equal(
+        payload["choices"][0]["finish_reason"],
+        "length",
+        "stateful finish_reason should be propagated",
+    )
+    print("[PASS] test_openai_route_stateful_non_stream_propagates_finish_reason")
 
 
 async def test_openai_route_stateful_stream_uses_state_stream() -> None:
@@ -348,6 +383,7 @@ async def test_openai_route_stateless_stream_respects_chunk_size_override() -> N
 async def main() -> None:
     await test_openai_route_stateless_non_stream_uses_dynamic_batch_generate()
     await test_openai_route_stateful_non_stream_uses_state_cache()
+    await test_openai_route_stateful_non_stream_propagates_finish_reason()
     await test_openai_route_stateful_stream_uses_state_stream()
     await test_openai_route_stateless_stream_uses_graph_stream()
     await test_openai_route_stateless_stream_respects_chunk_size_override()
