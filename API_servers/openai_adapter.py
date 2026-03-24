@@ -59,15 +59,13 @@ def format_openai_prompt(body: dict, enable_think: bool) -> str:
             system_parts.append(content)
             continue
         dialogue_role = role_map.get(role, role.capitalize() or "User")
-        history_messages.append((dialogue_role, content))
-
-    if not current_prompt and history_messages:
-        current_prompt = history_messages[-1][1].strip()
+        history_messages.append((role, dialogue_role, content))
 
     if (
         current_prompt
         and history_messages
-        and history_messages[-1][1].strip() == current_prompt
+        and history_messages[-1][0] == "user"
+        and history_messages[-1][2].strip() == current_prompt
     ):
         history_messages = history_messages[:-1]
 
@@ -78,7 +76,8 @@ def format_openai_prompt(body: dict, enable_think: bool) -> str:
     if history_messages:
         prompt_parts.append(
             double_newline.join(
-                f"{role}: {content}" for role, content in history_messages
+                f"{dialogue_role}: {content}"
+                for _, dialogue_role, content in history_messages
             )
         )
     if current_prompt:

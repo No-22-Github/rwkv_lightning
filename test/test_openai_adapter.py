@@ -159,6 +159,22 @@ def test_format_openai_state_prompt_rejects_empty() -> None:
     raise AssertionError("state prompt should reject empty payload")
 
 
+def test_format_openai_prompt_preserves_tool_role() -> None:
+    body = {
+        "messages": [
+            {"role": "user", "content": "What is the weather?"},
+            {"role": "assistant", "content": "I'll check."},
+            {"role": "tool", "content": "{\"temp\": 20}"},
+        ]
+    }
+    prompt = format_openai_prompt(body, enable_think=False)
+    if "Tool: {\"temp\": 20}" not in prompt:
+        raise AssertionError("tool role should be preserved in prompt")
+    if "User: {\"temp\": 20}" in prompt:
+        raise AssertionError("tool output must not be relabeled as user")
+    print("[PASS] test_format_openai_prompt_preserves_tool_role")
+
+
 def main() -> None:
     print("Running openai_adapter parsing tests...")
     _ = format_openai_prompt({"messages": [{"role": "user", "content": "hi"}]}, False)
@@ -168,6 +184,7 @@ def main() -> None:
     test_parse_tool_call_response_keeps_first_tool_call_when_multiple_exist()
     test_format_openai_state_prompt_only_includes_incremental_messages()
     test_format_openai_state_prompt_rejects_empty()
+    test_format_openai_prompt_preserves_tool_role()
     print("All openai_adapter parsing tests passed.")
 
 
