@@ -764,6 +764,7 @@ class InferenceEngine:
         out = self.model.forward(tokens, state).float()
 
         generated_tokens = []
+        finish_reason = "length" if max_length <= 0 else "stop"
         for _ in range(max_length):
             if out.dim() == 1:
                 out = out.unsqueeze(0)
@@ -785,15 +786,18 @@ class InferenceEngine:
             tok = new_tokens[0]
 
             if tok in stop_tokens:
+                finish_reason = "stop"
                 break
 
             generated_tokens.append(tok)
             out = self.model.forward(tok, state).float()
+        else:
+            finish_reason = "length"
         decoded = [self.tokenizer.decode(generated_tokens, utf8_errors="ignore")]
 
         gc.collect()
         torch.cuda.empty_cache()
-        return decoded
+        return decoded, finish_reason
 
     async def batch_infer_stream_state(
         self,
@@ -916,6 +920,9 @@ class InferenceEngine:
         alpha_frequency=0.5,
         alpha_decay=0.996,
     ):
+        if max_generate_tokens <= 0:
+            return [""]
+
         prompt = inputs[0]
         encoded_prompt = self.tokenizer.encode(prompt)
         state = self.model.generate_zero_state(0)
@@ -945,9 +952,11 @@ class InferenceEngine:
         static_state[2].copy_(state[2])
         static_output.copy_(out)
 
-        generated_tokens = [token]
+        generated_tokens = []
+        if token not in stop_tokens:
+            generated_tokens.append(token)
 
-        for _ in range(max_generate_tokens):
+        for _ in range(max_generate_tokens - 1):
             x_emb = self.model.z["emb.weight"][token]
             static_input.copy_(x_emb)
 
@@ -969,9 +978,9 @@ class InferenceEngine:
                 top_p,
             ).tolist()
             token = new_tokens[0]
-            generated_tokens.append(token)
             if token in stop_tokens:
                 break
+            generated_tokens.append(token)
 
         del state
         del static_state
@@ -997,6 +1006,10 @@ class InferenceEngine:
         alpha_decay=0.996,
         chunk_size=32,
     ):
+        if max_generate_tokens <= 0:
+            yield "data: [DONE]\n\n"
+            return
+
         prompt = inputs[0]
         ttft_enabled = os.getenv("RWKV_TTFT_LOG") == "1"
         ttft_start = time.perf_counter() if ttft_enabled else None
@@ -1101,7 +1114,7 @@ class InferenceEngine:
                 else:
                     token_buffer.append(token)
 
-            for _ in range(max_generate_tokens):
+            for _ in range(max_generate_tokens - 1):
                 x_emb = self.model.z["emb.weight"][token]
                 static_input.copy_(x_emb)
 
